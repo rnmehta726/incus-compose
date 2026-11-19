@@ -213,21 +213,17 @@ For a bind mount this must be set inline on the volume entry (see
 create it, and never removes it (not even with `down --volumes` / equivalent),
 since it doesn't own the volume's lifecycle.
 
-**incus-compose:** every named volume, external or not, goes through the same
-get-or-create path: reuse the Incus storage volume if it already exists, create
-it if it doesn't. There's no tracking of "this one was pre-existing."
-Concretely, that means:
+**incus-compose:** the same - an external volume must already exist, is used
+under its own name (or `name:`), and is never removed by `down --volumes`. Two
+things differ:
 
-- A typo'd or renamed volume that would fail fast under Docker (volume not
-  found) instead silently creates a new, empty volume here.
-- `incus-compose down --volumes` deletes every storage volume tracked for the
-  project, including ones marked `external: true`, and there's no protection
-  against removing a volume you intended to be pre-existing and shared with
-  something else.
+- The volume has to live in the project's own Incus project. A volume in another
+  Incus project, such as `default`, is not found.
+- `incus-compose down --project` deletes the whole Incus project, and an
+  external volume inside it goes with it. Docker has no equivalent of removing
+  the project.
 
-If you need to reference a real pre-existing Incus storage volume without
-risking it being deleted, avoid `down --volumes` for that project, or manage the
-volume directly with `incus storage volume` outside of compose.
+See [External Volumes](/compose-compatibility/volumes#external-volumes).
 
 ## Instance Naming
 

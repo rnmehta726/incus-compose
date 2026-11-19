@@ -31,10 +31,57 @@ leafwiki_last_author_id: system
   below)
 - Prefetching - a volume starts from what the image ships at its target (see
   below)
+- External volumes - use a pre-existing Incus storage volume under its own name
+  (see below)
 
 Not supported:
 
 - Volume driver options
+
+## External Volumes
+
+Mark a volume as `external: true` to use a storage volume that already exists in
+Incus. incus-compose will never create or delete an external volume, not even
+with `down --volumes`, and `up` fails if it does not exist.
+
+```yaml
+services:
+  app:
+    image: docker.io/library/alpine:latest
+    volumes:
+      - photos:/data
+
+volumes:
+  photos:
+    external: true
+```
+
+An external volume keeps its own name: `photos` above is the Incus volume
+`photos`, not `vol-photos`. Set `name:` when the Incus volume is not called what
+the compose file calls it:
+
+```yaml
+volumes:
+  photos:
+    external: true
+    name: family-photos
+```
+
+The volume has to live in the project's own Incus project and in the storage
+pool the service uses (`x-incus-compose.pool`, else the default pool). Create it
+there, or move it there, before the first `up`:
+
+```bash
+incus-compose incus storage volume create default photos
+```
+
+incus-compose did not create the volume, so it does not check its
+`security.shifted` / `initial.uid` / `initial.gid` against the image either; the
+files in it keep whatever owner they already have.
+
+:::warning `down --project` deletes the Incus project and everything in it,
+external volumes included. Keep a volume you want to outlive the project in a
+project of its own, or back it up first. :::
 
 ## Image Volumes
 

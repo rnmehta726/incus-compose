@@ -272,7 +272,9 @@ Then update `x-incus-compose.pool` in your compose file and run
 `incus-compose up --recreate` to reattach.
 
 Volumes are stored with a `vol-` prefix. Long names are hashed, so
-`my-very-long-volume-name` may become `vol-a1b2c3d4...`. Use
+`my-very-long-volume-name` may become `vol-a1b2c3d4...`. An
+[external volume](/compose-compatibility/volumes#external-volumes) keeps its own
+name. Use
 `incus storage volume list` to find the actual name before moving:
 
 ```bash
