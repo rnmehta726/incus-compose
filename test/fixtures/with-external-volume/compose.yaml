@@ -1,0 +1,15 @@
+services:
+  app:
+    image: docker.io/library/nginx:alpine
+    environment:
+      NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE: 1
+    x-incus:
+      limits.cpu: 1
+    volumes:
+      - type: volume
+        source: photos
+        target: /data/photos
+
+volumes:
+  photos:
+    external: true

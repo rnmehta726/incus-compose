@@ -2085,6 +2085,54 @@ func TestInstanceVolumeDevices(t *testing.T) {
 		assert.Equal(t, "fast", devices[0].Config.Disk.StorageVolumeConfig.Pool)
 	})
 
+	// compose-go sets Name, so these fill it in the way the loader would.
+	volumeTests := []struct {
+		name         string
+		source       string
+		volume       types.VolumeConfig
+		wantName     string
+		wantExternal bool
+	}{
+		{
+			name:         "external volume is named by its compose name",
+			source:       "photos",
+			volume:       types.VolumeConfig{External: true, Name: "photos"},
+			wantName:     "photos",
+			wantExternal: true,
+		},
+		{
+			name:         "external volume is named by its name field",
+			source:       "pics",
+			volume:       types.VolumeConfig{External: true, Name: "family-photos"},
+			wantName:     "family-photos",
+			wantExternal: true,
+		},
+		{
+			name:     "managed volume ignores the project-prefixed name",
+			source:   "managed",
+			volume:   types.VolumeConfig{Name: "test_managed"},
+			wantName: "vol-managed",
+		},
+	}
+
+	for _, tt := range volumeTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := &types.Project{Volumes: types.Volumes{tt.source: tt.volume}}
+			service := types.ServiceConfig{Name: "web", Volumes: []types.ServiceVolumeConfig{
+				{Type: "volume", Source: tt.source, Target: "/data"},
+			}}
+
+			devices, _, resources, err := instanceVolumeDevices(c, p, service, nil, "", "")
+			require.NoError(t, err)
+			require.Len(t, devices, 1)
+			require.Len(t, resources, 1)
+			require.NotNil(t, devices[0].Config.Disk.StorageVolumeConfig)
+			assert.Equal(t, tt.wantName, resources[0].IncusName())
+			assert.Equal(t, tt.wantExternal, devices[0].Config.Disk.StorageVolumeConfig.External)
+		})
+	}
+
 	t.Run("bind seed file", func(t *testing.T) {
 		t.Parallel()
 		file := filepath.Join(t.TempDir(), "seed.conf")

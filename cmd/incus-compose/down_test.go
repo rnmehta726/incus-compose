@@ -178,6 +178,58 @@ func TestE2EDownServiceVolumes(t *testing.T) {
 	assert.Empty(t, volumes(), "down <service> --volumes should delete the service's volume")
 }
 
+// TestE2EExternalVolume pins that an external volume must exist, is mounted
+// under its own name, and survives down --volumes.
+func TestE2EExternalVolume(t *testing.T) {
+	t.Parallel()
+	testlib.SkipE2E(t)
+
+	ctx := t.Context()
+	pn := t.Name()
+	compose := testlib.Fixture(t, "with-external-volume", "compose.yaml")
+
+	testlib.CleanupCompose(t, pn, "-f", compose, "down", "--project")
+
+	// The Incus project does not exist before the first up, so the volume can
+	// only be created after it.
+	_, err := testlib.RunCompose(ctx, t, pn, "", nil, "-f", compose, "up", "--detach")
+	require.Error(t, err, "up must fail while the external volume is missing")
+
+	gc, err := client.NewTestClient(ctx)
+	require.NoError(t, err)
+
+	pc, err := gc.EnsureProject(pn)
+	require.NoError(t, err)
+
+	pool := pc.Config().DefaultStoragePool
+
+	volumes := func() []string {
+		t.Helper()
+
+		out, err := testlib.RunCompose(ctx, t, pn, "", nil, "-f", compose,
+			"incus", "storage", "volume", "list", pool, "type=custom", "--format=csv", "-c", "n")
+		require.NoError(t, err)
+
+		return strings.Split(strings.TrimSpace(out), "\n")
+	}
+
+	assert.NotContains(t, volumes(), "photos", "a failed up must not create the external volume")
+
+	_, err = testlib.RunCompose(ctx, t, pn, "", nil, "-f", compose,
+		"incus", "storage", "volume", "create", pool, "photos")
+	require.NoError(t, err)
+
+	_, err = testlib.RunCompose(ctx, t, pn, "", nil, "-f", compose, "up", "--detach")
+	require.NoError(t, err)
+
+	assert.NotContains(t, volumes(), "vol-photos", "an external volume must not get the vol- prefix")
+
+	_, err = testlib.RunCompose(ctx, t, pn, "", nil, "-f", compose, "down", "--volumes")
+	require.NoError(t, err)
+
+	assert.Contains(t, volumes(), "photos", "down --volumes must keep the external volume")
+}
+
 // TestE2EDownUnknownService verifies that down with an unknown service name
 // fails with an error rather than silently exiting 0.
 func TestE2EDownUnknownService(t *testing.T) {

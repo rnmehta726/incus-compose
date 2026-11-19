@@ -3,12 +3,14 @@ package client
 import (
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	incusApi "github.com/lxc/incus/v7/shared/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -56,6 +58,55 @@ func TestStorageVolumeIncusName_PrefixedWithProject(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "mydata", vol.Name())
 	require.Equal(t, "vol-mydata", vol.IncusName())
+}
+
+func TestStorageVolumeExternal_IncusName(t *testing.T) {
+	t.Parallel()
+	c := NewOfflineClient(t.Context(), "volume-test")
+
+	tests := []struct {
+		name   string
+		volume string
+		config *StorageVolumeConfig
+		want   string
+	}{
+		{
+			name:   "keeps the compose name without the vol- prefix",
+			volume: "photos",
+			config: &StorageVolumeConfig{External: true},
+			want:   "photos",
+		},
+		{
+			name:   "takes the override name",
+			volume: "pics",
+			config: &StorageVolumeConfig{External: true, OverrideName: "family-photos"},
+			want:   "family-photos",
+		},
+		{
+			name:   "a long name is not hashed",
+			volume: "ext-" + strings.Repeat("a", MaxIncusNameLen),
+			config: &StorageVolumeConfig{External: true},
+			want:   "ext-" + strings.Repeat("a", MaxIncusNameLen),
+		},
+		{
+			name:   "the override name is ignored unless external",
+			volume: "managed",
+			config: &StorageVolumeConfig{OverrideName: "family-photos"},
+			want:   "vol-managed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r, err := c.Resource(KindStorageVolume, tt.volume, tt.config)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.volume, r.Name())
+			assert.Equal(t, tt.want, r.IncusName())
+		})
+	}
 }
 
 func TestStorageVolumeConfig_DefaultPool(t *testing.T) {
@@ -328,6 +379,92 @@ func TestStorageVolumeDelete(t *testing.T) {
 			require.False(t, r.IsEnsured())
 		})
 	}
+}
+
+// ----------------------------------------------------------------------------
+// External Volume Tests
+// ----------------------------------------------------------------------------
+
+// createExternalVolume creates a plain volume the way a user would outside
+// compose, and returns its Incus name.
+func createExternalVolume(t *testing.T, c *Client, name string) string {
+	t.Helper()
+
+	r, err := c.Resource(KindStorageVolume, name, &StorageVolumeConfig{})
+	require.NoError(t, err)
+	require.NoError(t, RunAction(t.Context(), r, ActionEnsure, OptionCreate()))
+
+	return r.IncusName()
+}
+
+func TestStorageVolumeExternal_EnsureFailsIfNotExists(t *testing.T) {
+	t.Parallel()
+	skipLocal(t)
+	ctx := t.Context()
+	c := newRandomTestClient(t, "volume-ext-")
+
+	r, err := c.Resource(KindStorageVolume, "missing-external", &StorageVolumeConfig{External: true})
+	require.NoError(t, err)
+
+	err = RunAction(ctx, r, ActionEnsure, OptionCreate())
+	require.ErrorIs(t, err, ErrNotFound)
+	require.False(t, r.IsEnsured())
+
+	conn, err := c.Connection()
+	require.NoError(t, err)
+
+	_, _, err = conn.GetStoragePoolVolume(ctx, c.incusProject, c.Config().DefaultStoragePool, "custom", "missing-external", nil)
+	assert.True(t, incusApi.StatusErrorCheck(err, http.StatusNotFound), "an external volume must not be created, got %v", err)
+}
+
+func TestStorageVolumeExternal_DeleteIsNoOp(t *testing.T) {
+	t.Parallel()
+	skipLocal(t)
+	ctx := t.Context()
+	c := newRandomTestClient(t, "volume-extdel-")
+
+	incusName := createExternalVolume(t, c, "test-ext-del")
+
+	extClient, err := c.globalClient.getProject(c.project)
+	require.NoError(t, err)
+
+	r, err := extClient.Resource(KindStorageVolume, "data", &StorageVolumeConfig{External: true, OverrideName: incusName})
+	require.NoError(t, err)
+	require.NoError(t, RunAction(ctx, r, ActionEnsure))
+	require.True(t, r.IsEnsured())
+
+	require.NoError(t, RunAction(ctx, r, ActionDelete, OptionForce()))
+	require.False(t, r.IsEnsured())
+
+	conn, err := c.Connection()
+	require.NoError(t, err)
+
+	_, _, err = conn.GetStoragePoolVolume(ctx, c.incusProject, c.Config().DefaultStoragePool, "custom", incusName, nil)
+	require.NoError(t, err, "an external volume must survive a delete")
+}
+
+func TestStorageVolumeExternal_StartSkipsShiftCheck(t *testing.T) {
+	t.Parallel()
+	skipLocal(t)
+	ctx := t.Context()
+	c := newRandomTestClient(t, "volume-extshift-")
+
+	// Not shifted, so a managed volume with this config would fail the check.
+	incusName := createExternalVolume(t, c, "test-ext-shift")
+
+	extClient, err := c.globalClient.getProject(c.project)
+	require.NoError(t, err)
+
+	r, err := extClient.Resource(KindStorageVolume, "data", &StorageVolumeConfig{
+		External:     true,
+		OverrideName: incusName,
+		Shifted:      true,
+		Owner:        &Owner{UID: 1000, GID: 1000},
+	})
+	require.NoError(t, err)
+	require.NoError(t, RunAction(ctx, r, ActionEnsure))
+
+	require.NoError(t, RunAction(ctx, r, ActionStart))
 }
 
 // ----------------------------------------------------------------------------
