@@ -1141,6 +1141,13 @@ func instanceVolumeDevices(c *client.Client, p *types.Project, service types.Ser
 				Extensions:    extensions,
 			}
 
+			// compose-go fills Name in with the key for an external volume,
+			// or with the `name:` the user wrote.
+			if volDef.External {
+				volConfig.External = true
+				volConfig.OverrideName = volDef.Name
+			}
+
 			v, err := c.Resource(client.KindStorageVolume, cVol.Source, volConfig)
 			if err != nil {
 				errs = errors.Join(errs, err)

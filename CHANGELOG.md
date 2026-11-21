@@ -11,6 +11,14 @@ final version), and the beta suffix gained a dot (`beta.16`) from beta.16 onward
 for correct semver ordering. Headings below preserve each release's announced
 form.
 
+## [Unreleased]
+
+### Added
+
+- `external: true` on a named volume: the volume must already exist, is used
+  under its own Incus name (or `name:`) instead of `vol-<name>`, and is never
+  deleted, not even by `down --volumes`. (by @rnmehta726)
+
 ## [v1.4.0] - 2026-11-11
 
 ### Added

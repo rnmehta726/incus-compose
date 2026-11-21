@@ -50,6 +50,14 @@ type StorageVolumeConfig struct {
 	// Target is the cluster member to create the volume on when the pool is local.
 	Target string
 
+	// External marks the volume as managed outside incus-compose: it must
+	// already exist, is used under its own name, and is never deleted.
+	External bool
+
+	// OverrideName is the Incus name of an external volume. Empty means the
+	// resource name. Ignored unless External is set.
+	OverrideName string
+
 	// Extensions contains additional volume configuration options.
 	Extensions map[string]string
 }
@@ -87,7 +95,7 @@ type StorageVolumeState struct {
 }
 
 // newStorageVolume returns an existing StorageVolume resource or creates a new one.
-// The volume name is automatically prefixed with the project name for isolation.
+// The volume name is prefixed with "vol-", unless the volume is external.
 func newStorageVolume(c *Client, name string, configGetter Config) (*StorageVolume, error) {
 	if configGetter == nil {
 		return nil, ErrUnknownConfig.WithKindName(KindStorageVolume, name)
@@ -116,7 +124,14 @@ func newStorageVolume(c *Client, name string, configGetter Config) (*StorageVolu
 		Config:       *config,
 	}
 
-	vol.incusName = "vol-" + SanitizeIncusName(name, MaxIncusNameLen-4)
+	switch {
+	case config.External && config.OverrideName != "":
+		vol.incusName = config.OverrideName
+	case config.External:
+		vol.incusName = name
+	default:
+		vol.incusName = "vol-" + SanitizeIncusName(name, MaxIncusNameLen-4)
+	}
 
 	// Every accessor dereferences this, so it must never be nil.
 	vol.state.Store(&StorageVolumeState{})
@@ -173,7 +188,8 @@ func (r *StorageVolume) Ensure(ctx context.Context, opts ...Option) error {
 
 	err = r.get(ctx)
 	if err != nil {
-		if options.Create && errors.Is(err, ErrNotFound) {
+		// External volumes must exist - don't create them.
+		if options.Create && !r.Config.External && errors.Is(err, ErrNotFound) {
 			err = r.create(ctx)
 
 			// Incus reports a lost create race either as "already exists" or as a
@@ -220,8 +236,9 @@ func (r *StorageVolume) Start(ctx context.Context, _ ...Option) error {
 	}
 
 	// If the user overwrites security.shifted do not validate against the image.
+	// An external volume was not created for this image, so it is not either.
 	_, hasShiftedConfig := r.Config.Extensions["security.shifted"]
-	if r.Config.Shifted && !hasShiftedConfig {
+	if r.Config.Shifted && !hasShiftedConfig && !r.Config.External {
 		var errs error
 
 		// Check shifted is enabled
@@ -425,6 +442,7 @@ func (r *StorageVolume) pushContent(ctx context.Context) error {
 }
 
 // Delete removes the storage volume from Incus.
+// External volumes are never deleted.
 func (r *StorageVolume) Delete(ctx context.Context, opts ...Option) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -449,6 +467,13 @@ func (r *StorageVolume) Delete(ctx context.Context, opts ...Option) error {
 
 		r.client.resources.Remove(r)
 		return err
+	}
+
+	if r.Config.External {
+		r.clearState()
+
+		r.client.resources.Remove(r)
+		return r.client.hookAfter(ctx, ActionDelete, r, options, nil)
 	}
 
 	conn, err := r.client.Connection()
