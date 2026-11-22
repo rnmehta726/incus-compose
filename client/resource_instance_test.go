@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -668,6 +669,93 @@ func TestInstancePauseUnpause(t *testing.T) {
 	assert.Equal(t, "false", inst.State().IncusInstance.Config[HealthStoppedKey])
 
 	assert.ErrorIs(t, RunAction(ctx, inst, ActionUnpause), ErrNotPaused)
+}
+
+// TestInstanceGroupAdd pins that group_add lands as lxc.init.groups in raw.lxc,
+// next to a raw.lxc of the user's own, and never over one that sets it.
+func TestInstanceGroupAdd(t *testing.T) {
+	t.Parallel()
+	skipLocal(t)
+	ctx := t.Context()
+	c := newRandomTestClient(t, "group-add-")
+
+	imageResource, err := c.Resource(KindImage, "docker.io/nginx:alpine", &ImageConfig{})
+	require.NoError(t, err)
+	image, ok := imageResource.(*Image)
+	require.True(t, ok)
+
+	// The nginx name is resolved by reading the image through an instance of its own.
+	t.Cleanup(func() {
+		assert.NoError(t, image.Done())
+	})
+
+	tests := []struct {
+		name       string
+		groups     []string
+		extensions map[string]string
+		want       string
+		wantNot    string
+	}{
+		{
+			name:   "numbers and names",
+			groups: []string{"192", "nginx"},
+			want:   "lxc.init.groups = 192,101\n",
+		},
+		{
+			name:       "after the user's raw.lxc",
+			groups:     []string{"192"},
+			extensions: map[string]string{"raw.lxc": "lxc.log.level = 1"},
+			want:       "lxc.log.level = 1\nlxc.init.groups = 192\n",
+		},
+		{
+			name:       "the user's lxc.init.groups wins",
+			groups:     []string{"192"},
+			extensions: map[string]string{"raw.lxc": "lxc.init.groups = 7\n"},
+			want:       "lxc.init.groups = 7\n",
+			wantNot:    "192",
+		},
+		{
+			name:    "no group_add",
+			wantNot: "lxc.init.groups",
+		},
+	}
+
+	stack := NewStack(c)
+	stack.Add(image)
+
+	instances := make([]*Instance, len(tests))
+	for i, tt := range tests {
+		res, err := c.Resource(KindInstance, "web"+strconv.Itoa(i), &InstanceConfig{
+			Image:      image.Name(),
+			GroupAdd:   tt.groups,
+			Extensions: tt.extensions,
+		})
+		require.NoError(t, err)
+
+		instances[i], ok = res.(*Instance)
+		require.True(t, ok)
+		stack.Add(instances[i])
+	}
+
+	require.NoError(t, stack.ForAction(ActionEnsure).Run(ctx, ActionEnsure, OptionCreate()))
+
+	conn, err := c.Connection()
+	require.NoError(t, err)
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := conn.GetInstance(ctx, c.incusProject, instances[i].IncusName(), nil)
+			require.NoError(t, err)
+
+			raw := got.Config["raw.lxc"]
+			if tt.want != "" {
+				assert.Contains(t, raw, tt.want)
+			}
+			if tt.wantNot != "" {
+				assert.NotContains(t, raw, tt.wantNot)
+			}
+		})
+	}
 }
 
 func TestInstanceConfigChanged(t *testing.T) {

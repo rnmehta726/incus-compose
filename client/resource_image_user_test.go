@@ -101,3 +101,42 @@ func TestImageResolveUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, names)
 }
+
+// TestImageResolveGroups resolves group_add names against the image's own
+// /etc/group, keeping the order compose gave them.
+func TestImageResolveGroups(t *testing.T) {
+	t.Parallel()
+	skipLocal(t)
+
+	ctx := t.Context()
+	c := newRandomTestClient(t, "image-groups-")
+
+	res, err := c.Resource(KindImage, "docker.io/nginx:alpine", &ImageConfig{})
+	require.NoError(t, err)
+	require.NoError(t, RunAction(ctx, res, ActionEnsure, OptionCreate()))
+
+	img, ok := res.(*Image)
+	require.True(t, ok)
+
+	t.Cleanup(func() {
+		assert.NoError(t, img.Done())
+	})
+
+	conn, err := c.Connection()
+	require.NoError(t, err)
+
+	gids, err := img.ResolveGroups(ctx, []string{"192", "0"})
+	require.NoError(t, err)
+	assert.Equal(t, []uint64{192, 0}, gids)
+
+	names, err := conn.GetInstanceNames(ctx, c.incusProject, nil)
+	require.NoError(t, err)
+	require.Empty(t, names, "numeric groups must not read the image")
+
+	gids, err = img.ResolveGroups(ctx, []string{"192", "nginx", "root"})
+	require.NoError(t, err)
+	assert.Equal(t, []uint64{192, 101, 0}, gids)
+
+	_, err = img.ResolveGroups(ctx, []string{"192", "nosuchgroup"})
+	require.ErrorIs(t, err, ErrNoSuchUser)
+}

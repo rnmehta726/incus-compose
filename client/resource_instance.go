@@ -128,6 +128,10 @@ type InstanceConfig struct {
 	// is nil.
 	User string
 
+	// GroupAdd is the compose `group_add:` list of supplementary groups, gids
+	// or names the image's own /etc/group gives them.
+	GroupAdd []string
+
 	// Target is the cluster member or @group to place the instance on.
 	Target string
 
@@ -763,6 +767,30 @@ func (r *Instance) create(ctx context.Context, opts ...Option) error {
 			}
 
 			raw += "lxc.environment.hooks = PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+			config["raw.lxc"] = raw
+		}
+	}
+
+	// Incus has no oci key for supplementary groups, and LXC drops them all
+	// unless lxc.init.groups names some. A raw.lxc from x-incus that sets it wins.
+	if len(r.Config.GroupAdd) > 0 && !image.NativeIncus() {
+		gids, err := image.ResolveGroups(ctx, r.Config.GroupAdd)
+		if err != nil {
+			return err
+		}
+
+		raw := config["raw.lxc"]
+		if !strings.Contains(raw, "lxc.init.groups") {
+			if raw != "" && !strings.HasSuffix(raw, "\n") {
+				raw += "\n"
+			}
+
+			groups := make([]string, 0, len(gids))
+			for _, gid := range gids {
+				groups = append(groups, strconv.FormatUint(gid, 10))
+			}
+
+			raw += "lxc.init.groups = " + strings.Join(groups, ",") + "\n"
 			config["raw.lxc"] = raw
 		}
 	}

@@ -53,6 +53,29 @@ func (r *Image) ResolveUser(ctx context.Context, user string) (*Owner, error) {
 	return &Owner{UID: uid, GID: gid}, nil
 }
 
+// ResolveGroups maps compose `group_add` entries to numeric gids, reading the
+// image's /etc/group for names.
+func (r *Image) ResolveGroups(ctx context.Context, groups []string) ([]uint64, error) {
+	gids := make([]uint64, 0, len(groups))
+
+	for _, group := range groups {
+		gid, err := strconv.ParseUint(group, 10, 32)
+		if err == nil {
+			gids = append(gids, gid)
+			continue
+		}
+
+		gid, _, err = r.imageIDs(ctx, "/etc/group", group)
+		if err != nil {
+			return nil, err
+		}
+
+		gids = append(gids, gid)
+	}
+
+	return gids, nil
+}
+
 // imageIDs looks name up in one of the image's id files.
 func (r *Image) imageIDs(ctx context.Context, path string, name string) (uint64, uint64, error) {
 	sc, err := r.SFTP(ctx)

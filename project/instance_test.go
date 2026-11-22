@@ -1021,6 +1021,44 @@ func TestServiceToInstanceUser(t *testing.T) {
 	})
 }
 
+// TestServiceToInstanceGroupAdd carries group_add untouched to the instance and
+// its pre_start runners; names resolve against the image only at creation.
+func TestServiceToInstanceGroupAdd(t *testing.T) {
+	t.Parallel()
+
+	build := func(groups []string) *client.Instance {
+		c := client.NewOfflineClient(t.Context(), "test")
+		service := types.ServiceConfig{
+			Name:     "web",
+			Image:    "docker.io/nginx:alpine",
+			GroupAdd: groups,
+			PreStart: []types.PreStartHook{
+				{ContainerSpec: types.ContainerSpec{Command: types.ShellCommand{"echo", "init"}}},
+			},
+		}
+		p := &types.Project{Services: types.Services{"web": service}}
+		inst, _, err := serviceToInstance(c, p, "web", &ResourcesOptions{}, 1, 1)
+		require.NoError(t, err)
+		require.Len(t, inst.Config.PreRun, 1)
+		return inst
+	}
+
+	t.Run("numbers and names", func(t *testing.T) {
+		t.Parallel()
+		inst := build([]string{"192", "audio"})
+		assert.Equal(t, []string{"192", "audio"}, inst.Config.GroupAdd)
+		assert.Equal(t, []string{"192", "audio"}, inst.Config.PreRun[0].Config.GroupAdd)
+		assert.NotContains(t, inst.Config.Extensions, "raw.lxc")
+	})
+
+	t.Run("no group_add", func(t *testing.T) {
+		t.Parallel()
+		inst := build(nil)
+		assert.Empty(t, inst.Config.GroupAdd)
+		assert.Empty(t, inst.Config.PreRun[0].Config.GroupAdd)
+	})
+}
+
 func TestServiceToInstanceWorkingDir(t *testing.T) {
 	t.Parallel()
 
