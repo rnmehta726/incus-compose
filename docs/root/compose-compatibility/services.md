@@ -17,6 +17,7 @@ leafwiki_last_author_id: system
 - `working_dir` - Set working directory
 - `user` - Run the container process as a specific UID/GID (numeric only, see
   below)
+- `group_add` - Supplementary groups for the container process (see below)
 - `dns` / `dns_search` / `domainname` - DNS resolver configuration (see below)
 - `sysctls` - Kernel parameters, set as `linux.sysctl.*` config (see below)
 - `environment` - Environment variables
@@ -142,6 +143,65 @@ _Since: 1.0.0-beta.22_
 
 _Changed in 1.3.0_: user and group names resolve against the image; only numbers
 were accepted before.
+
+## Group add
+
+`group_add` gives the container process supplementary groups on top of the one
+`user` sets, so it can use files owned by a group it is not otherwise in:
+
+```yaml
+services:
+  web:
+    image: docker.io/nginx:alpine
+    user: "1000"
+    group_add:
+      - "192" # owns the shared volume
+      - audio
+```
+
+Each entry is a GID or a name the image's own `/etc/group` defines, resolved
+the same way as a `user` group: a name the image does not define is an error,
+and a list of numbers never reads the image. `pre_start` runners get the same
+groups as the service.
+
+Incus has no `oci.*` option for supplementary groups, so incus-compose writes
+them as LXC's `lxc.init.groups` into `raw.lxc`:
+
+```yaml
+config:
+  raw.lxc: |
+    lxc.init.groups = 192,18
+```
+
+A `raw.lxc` of your own in `x-incus` is kept, with the line appended after it,
+and one that already sets `lxc.init.groups` wins over `group_add`. Because it is
+`raw.lxc`, a project with `restricted: "true"` rejects it, as it rejects any
+low-level option (see [Projects](/compose-compatibility#projects)).
+
+A native Incus image boots its own init system, which sets each service's
+groups itself, so `group_add` is ignored there, as `user` is.
+
+**Only the container's main process gets the groups.** Commands that Incus
+starts separately inside a running container run without them:
+
+- `incus-compose exec` (and `incus exec`)
+- `post_start` hooks
+- healthchecks
+
+The Incus exec API takes a user and a single group, with no supplementary
+groups, so there is nothing to pass them through. Docker applies `group_add` to
+`docker exec` and healthchecks too, so a healthcheck that reads a file only the
+added group can open passes under Docker and fails here.
+
+For the same reason `id` cannot confirm the groups: `incus-compose exec web id`
+shows the service's user and group without the added ones, and a plain
+`incus exec` runs as root. Read the main process instead:
+
+```bash
+incus-compose exec web grep Groups /proc/1/status
+```
+
+_Since: 1.5.0_
 
 ## Entrypoint and Command
 

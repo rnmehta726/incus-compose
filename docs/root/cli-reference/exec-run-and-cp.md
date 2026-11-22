@@ -38,7 +38,9 @@ not incus-compose's own connection settings.
 
 Like `docker compose exec`, the command runs as the instance's user and group by
 default: the image's `oci.uid` / `oci.gid`, or the numeric IDs from the service
-[`user:`](/compose-compatibility/services#user) override. Pass `--user` /
+[`user:`](/compose-compatibility/services#user) override. The service's
+[`group_add`](/compose-compatibility/services#group-add) groups are not applied,
+because the Incus exec API has no supplementary groups. Pass `--user` /
 `--group` to run as someone else:
 
 ```bash
